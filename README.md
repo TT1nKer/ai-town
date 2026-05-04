@@ -1,11 +1,28 @@
-# AI Town 🏠💻💌 (DF-style fork)
+# AI Town · structured-state kernel
 
-> **Fork 自 [a16z-infra/ai-town](https://github.com/a16z-infra/ai-town)**(commit `2693ed6`)。
-> 原仓库 README、协议、原作者署名一并保留(下文不变)。本 fork 的所有改动集中在 `df-style-kernel` 分支。
+> **Fork of [a16z-infra/ai-town](https://github.com/a16z-infra/ai-town)** (commit `2693ed6`).
+> Architecture-level rewrite of the agent loop. All changes on `df-style-kernel` branch.
+> Original README preserved verbatim at the bottom.
 
-[Original Live Demo](https://www.convex.dev/ai-town) · [Original Discord](https://discord.gg/PQUmTBTGmT)
+**TL;DR**: 把 a16z 原版的 "LLM 自主决策 + vector memory" 范式,改成 **"Dwarf-Fortress-style 结构化状态层 + LLM 作为解释器"** 范式。LLM 不再决定 NPC 该做什么,只把已经发生的状态翻译成对话。
 
-<img width="1454" alt="Screen Shot 2023-08-14 at 10 01 00 AM" src="https://github.com/a16z-infra/ai-town/assets/3489963/a4c91f17-23ed-47ec-8c4e-9f9a8505057d">
+实测产出对比 — 同一个 NPC(Bob,grumpy gardener)对话:
+
+```
+[a16z 原版输出]                              [本 fork 输出]
+Bob: (擦了擦汗)我说，我刚才                  Bob: 今天烦得很，我的笔记本
+没听清你说什么，能再说一遍吗？                 找不到了，你看见没有？
+今天天气真的很好，我刚在花园                 Alice: 笔记本？我今早也丢了半
+里干活，太累了。                              块面包，找遍了实验室都不见。
+                                              你说，会不会是同一个黑洞吞了
+                                              它们？
+                                            Bob: 什么黑洞不黑洞的，尽说些
+                                              没用的话。我自个儿再去找找。
+```
+
+差异不在"说得多漂亮",在 **(1) 长度紧凑、(2) 引用了今天发生的具体事(笔记本/面包)、(3) 两人真在交锋而不是各说各的**。这些不是 prompt 调出来的,是架构改出来的。
+
+---
 
 ## 这个 Fork 在做什么 (df-style-kernel branch)
 
@@ -233,9 +250,14 @@ npm run dev
 
 ---
 
-下面是原版 README,**未做修改**。
+<details>
+<summary><b>📜 原版 a16z-infra/ai-town README(未修改,折叠保留)</b></summary>
 
----
+<br>
+
+[Live Demo (a16z)](https://www.convex.dev/ai-town) · [Discord (a16z)](https://discord.gg/PQUmTBTGmT)
+
+<img width="1454" alt="Screen Shot 2023-08-14 at 10 01 00 AM" src="https://github.com/a16z-infra/ai-town/assets/3489963/a4c91f17-23ed-47ec-8c4e-9f9a8505057d">
 
 AI Town is a virtual town where AI characters live, chat and socialize.
 
@@ -939,3 +961,5 @@ and [runtime validation](https://docs.convex.dev/database/schemas#validators) fo
 [database data](https://docs.convex.dev/database/schemas#schema-validation).
 
 Everything scales automatically, and it’s [free to start](https://www.convex.dev/plans).
+
+</details>
