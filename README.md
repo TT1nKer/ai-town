@@ -1,10 +1,33 @@
-# AI Town 🏠💻💌
+# AI Town 🏠💻💌 (DF-style fork)
 
-[Live Demo](https://www.convex.dev/ai-town)
+> **Fork 自 [a16z-infra/ai-town](https://github.com/a16z-infra/ai-town)**(commit `2693ed6`)。
+> 原仓库 README、协议、原作者署名一并保留(下文不变)。本 fork 的所有改动集中在 `df-style-kernel` 分支。
 
-[Join our community Discord: AI Stack Devs](https://discord.gg/PQUmTBTGmT)
+[Original Live Demo](https://www.convex.dev/ai-town) · [Original Discord](https://discord.gg/PQUmTBTGmT)
 
 <img width="1454" alt="Screen Shot 2023-08-14 at 10 01 00 AM" src="https://github.com/a16z-infra/ai-town/assets/3489963/a4c91f17-23ed-47ec-8c4e-9f9a8505057d">
+
+## 这个 Fork 在做什么 (df-style-kernel branch)
+
+不是改 prompt,不是换模型——是**架构级重写**。
+
+a16z 原版是 "LLM 自主决策" 范式:每个 agent 拿到周围信息,让 LLM 决定下一步做什么。
+这个 fork 改成 "**结构化状态层 + LLM 作为解释器**" 范式:
+
+- **状态层**(取代原版 vector memory):personality (10 维) · needs (动态衰减) ·
+  contacts (近接感知) · dailyEvents (模板生成)
+- **决策层**:utility-based action selection,灵感来自 Dwarf Fortress;
+  LLM 不再决定 NPC 该做什么
+- **解释器层**:LLM 唯一职责变成把当前状态翻译成对话;DeepSeek tool use
+  + thinking + strict prompt
+
+净改动 ~455 行 / 10 文件改 + 4 新文件。详见 commits in `df-style-kernel`。
+
+---
+
+下面是原版 README,**未做修改**。
+
+---
 
 AI Town is a virtual town where AI characters live, chat and socialize.
 
