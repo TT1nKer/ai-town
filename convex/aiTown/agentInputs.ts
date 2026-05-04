@@ -8,6 +8,7 @@ import { point } from '../util/types';
 import { Descriptions } from '../../data/characters';
 import { AgentDescription } from './agentDescription';
 import { Agent } from './agent';
+import { generateDailyEvents } from './dailyEvents';
 
 export const agentInputs = {
   finishRememberConversation: inputHandler({
@@ -129,12 +130,16 @@ export const agentInputs = {
         description.character,
         description.identity,
       );
+      const otherNames = Descriptions.filter((d) => d.name !== description.name).map((d) => d.name);
       const agentId = game.allocId('agents');
       game.world.agents.set(
         agentId,
         new Agent({
           id: agentId,
           playerId: playerId,
+          needs: { energy: 1, social: 1, safety: 1, purpose: 1, comfort: 1 },
+          contacts: [],
+          dailyEvents: generateDailyEvents(description.name, otherNames),
           inProgressOperation: undefined,
           lastConversation: undefined,
           lastInviteAttempt: undefined,
@@ -147,6 +152,7 @@ export const agentInputs = {
           agentId: agentId,
           identity: description.identity,
           plan: description.plan,
+          personality: description.personality,
         }),
       );
       return { agentId };
