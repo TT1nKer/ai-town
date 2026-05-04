@@ -25,6 +25,214 @@ a16z 原版是 "LLM 自主决策" 范式:每个 agent 拿到周围信息,让 LLM
 
 ---
 
+## 设计决策 (why,不是 what)
+
+### 1. 不要 vector memory
+
+原版用 OpenAI embeddings + similarity search 做长期记忆。两个问题:
+- 中文 LLM 上 embedding 质量不一,搜中文话题准确度大幅劣化
+- 相似度检索 ≠ "agent 应该记得这件事";检索"语义最近"不等于"我对这个人的事的记忆"
+
+替换成 Doomsday-style 结构化:每个 agent 维护一个 `contacts` 数组(谁、最后看见时间、互动次数),每个 NPC 出生时生成 3 条 `dailyEvents` 文本作为话题钩子。**直接索引到 entity,不通过相似度**。
+
+### 2. 不要 LLM 做决策
+
+让 LLM 决定"我现在该做什么"是浪费 token 又不稳定的事,而且每次 ~3-5s 延迟。Dwarf Fortress 用 utility-based action selection 做了几十年,效果稳定。
+
+替换成 `pickAndApplyAction(game, now)`,纯规则:
+- `energy < 0.3` → rest
+- `social < 0.5 && contacts.length > 0` → 走向最近见过的人
+- 两人接近 `CONVERSATION_DISTANCE` → 主动发起对话
+- 否则 → 随机 wander
+
+LLM 完全不参与"我该做什么"的决策。它的唯一职责是,**当一切已经发生**(我决定要说话了),把当前状态翻译成一句话。
+
+### 3. Per-NPC 耐心,不要全局常量
+
+原版用 `AWKWARD_CONVERSATION_TIMEOUT = 60_000`,所有 NPC 一样。Bob (extraversion=-0.7) 跟 Pete (loyalty=0.8) 的耐心不应该一样。
+
+替换成 `patienceMsFor(personality)`:
+- base 30s
+- conscientiousness > 0.5 → +20s
+- agreeableness > 0.5 → +20s
+- loyalty > 0.5 → +30s
+- extraversion < -0.3 → -20s
+- neuroticism > 0.5 → -20s
+- agreeableness < -0.3 → -10s
+- clamp [10s, 120s]
+
+5 个 NPC 实测耐心:Bob 10s · Stella 20s · Alice 30s · Pete 80s · Lucky 80s。
+
+### 4. Tool use over JSON mode
+
+原版让 LLM 自由生成对话文本,然后正则清理。这有 ~10% 失败率(空消息、冗长括号动作、长度失控)。
+
+替换成 DeepSeek native tool use,`speak_in_character` 函数,`strict: true` schema 约束:
+```ts
+{
+  speech: string,            // 15-40 字中文
+  tone: enum[8 个语气],
+  should_leave: boolean
+}
+```
+
+经过实测发现 DeepSeek thinking mode 拒绝 `tool_choice="required"`,但**在 system prompt 末尾加"你必须通过调用 speak_in_character 工具来输出"** 后,`tool_choice="auto"` 实测 8/8 调工具(详见下面"测量")。
+
+### 5. 人类对话不触发 NPC 自动告别
+
+原版规则不区分人/NPC,所有对话用同一套消息数+时间阈值。结果:你打字慢,NPC 说"我先走了"踹你出场。
+
+修法: `earlyLeave = !otherIsHuman && (...)`。NPC↔NPC 还按原规则倦怠,人类↔NPC 只有硬上限触发(10 分钟超时 / 30 条消息上限)。
+
+### 6. LLM 自己决定何时离开 (should_leave),不是只看时间
+
+时间/消息数都是机械信号 — LLM 才知道"话题尽了,该告别了"。新增 `should_leave: bool` 字段,LLM 自己判断何时是自然的告别时机。System 1 规则只做兜底防卡死。
+
+---
+
+## Reproducible measurements
+
+| 指标 | 原版/早期 | F 配方(当前) | 方法 |
+|---|---|---|---|
+| Tool call 可靠性 | 60% (auto + 普通 prompt) | **8/8 (auto + 强 prompt)** | 同 system prompt 跑 8 次,统计 `tool_calls[0]` 是否存在 |
+| 消息平均长度 | 50-100 字 | **22-45 字** | 同 5 次对话,统计 message.text 字符数 |
+| 空消息率 | ~10% (JSON mode) | **0/8** | 同上 |
+| 括号动作泛滥 | 100%(每条都有) | **0/8** | grep `(.*?)` |
+| 单次 LLM 延迟 | - | 2.4s (non-thinking) / 4.2s (thinking) | API 响应时间 |
+| 首条对话生成 token 数 | - | 110-280(thinking 时) | API 返回 `usage.completion_tokens` |
+| Reasoning token 占比 | - | 13-16% (thinking + max_tokens=800) | `completion_tokens_details.reasoning_tokens` |
+
+A/B 跑过 4 个配方:
+- A: `deepseek-chat` + `tool_choice=required` + max_tokens=200 → 5/5,模板化
+- B: `deepseek-v4-flash` + thinking + auto + 普通 prompt → 3/5
+- C: v4-flash + `thinking:disabled` + required → 3/3,等同 A
+- D/E: v4-flash + thinking + required (specific tool) → API 拒绝(reasoner 不支持)
+- **F: v4-flash + thinking + auto + 强 prompt 末尾"必须调工具" → 8/8** ← 当前
+
+详细测试代码在我的开发笔记里(MEMORY.md)。
+
+---
+
+## 当前架构
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  L4. UI 层 (AI Town 自带,基本没动,只修了 footer overflow bug)│
+│      Vite + React + PixiJS                                    │
+└──────────────────────────────────────────────────────────────┘
+                              ▲
+┌──────────────────────────────────────────────────────────────┐
+│  L3. Interpreter 层(LLM = 嘴)                                │
+│      DeepSeek v4-flash + thinking + tool use F 配方            │
+│      strict tool 'speak_in_character' {speech,tone,should_leave}│
+└──────────────────────────────────────────────────────────────┘
+                              ▲
+┌──────────────────────────────────────────────────────────────┐
+│  L2. 决策层(System 1,纯规则,无 LLM)                       │
+│      pickAndApplyAction:rest / seek_familiar / wander / 发起对话│
+│      Per-NPC 耐心(personality 算)、Sys1 leave、人类豁免规则  │
+└──────────────────────────────────────────────────────────────┘
+                              ▲
+┌──────────────────────────────────────────────────────────────┐
+│  L1. 状态层(数值/结构化数据)                                │
+│      Personality (10维静态,Big Five + 5 补充)                │
+│      Needs (5维动态,带 decay/recovery)                        │
+│      Contacts (动态,近接感知驱动)                             │
+│      DailyEvents (3 条静态文本,出生时模板生成)                │
+└──────────────────────────────────────────────────────────────┘
+                              ▲
+┌──────────────────────────────────────────────────────────────┐
+│  L0. 引擎层 (AI Town 自带,基本没动)                           │
+│      Convex tick/step + worlds/agents/conversations           │
+└──────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 这个 Fork **不**做的事 (Limitations)
+
+按"涌现要素"来算(Replication / Variation / Selection / Memory / Boundary / Energy):
+
+| 要素 | 状态 | 备注 |
+|---|---|---|
+| 边界(我/环境) | ✅ 完整 | 个体边界清晰 |
+| 记忆 | ⚠️ 部分 | `npcMemories` 表 schema 已建,**至今未写入** |
+| 代价 / 能量流 | ⚠️ 部分 | needs 衰减,但 action 本身没有代价(走路不耗 energy 等) |
+| 复制 / 传播 | ❌ 没有 | NPC 间无信息扩散;Bob 知道的事不会通过他传给 Alice |
+| 变异 | ❌ 没有 | personality 永远不变,经历不塑造性格 |
+| 选择 / 淘汰 | ❌ 没有 | NPC 不死、不消失、不被替换 |
+
+按"对话能力"来算:
+
+- ❌ **Anti-fabrication**:NPC 接受用户植入的虚假过去("我们去年夏天见过吧?"→ Stella 顺着编)
+- ❌ **跨对话连续记忆**:同两个 NPC 第二次见面,**完全不知道**第一次聊过什么
+- ❌ **goals / 长期意图**:NPC 没有"我想达成 X"的字段
+- ❌ **真实事件系统**:世界里没有突发事件(火灾/盗窃/吵架),NPC 无可见证
+- ❌ **per-NPC LLM 配置**:目前所有 NPC 共用同一个 F 配方,只有耐心是 per-NPC
+
+按"工程"来算:
+
+- ⚠️ `agentRememberConversation` operation 已禁用 — 它依赖 embedding,DeepSeek 不提供
+- ⚠️ Daily events 是 session 内静态,无每日刷新 cron
+- ⚠️ 玩家 vs NPC 的输入空间不平等 — 玩家说哲学问题/英文/挑衅,NPC 被 schema 框死表达空间,会"诡异"
+
+---
+
+## 已知会"诡异"的输入
+
+由于 LLM 被 tool schema 锁定输出形状,以下输入会让对话出戏:
+
+| 玩家输入 | 期望反应 | 实际反应 |
+|---|---|---|
+| "你是 AI 吗?" | 优雅破墙 | 强制角色化拒答 |
+| 用英文说话 | 切英文 | prompt 写"不要英文",但偶发反规则 |
+| 深度哲学问题 | 长篇思考 | 被压成 15-40 字 |
+| "你帮我做 X 吧"(动作请求) | NPC 行动 | 只能用台词推开,无 action 接口 |
+| "我们去年夏天 ..." | "我不记得" | **顺着编**(anti-fabrication 缺失) |
+
+这些都是 design tradeoff,不是 bug。Fix 路径在 `MEMORY.md` 的"未来工作"段。
+
+---
+
+## Roadmap (按优先级)
+
+1. **写入 npcMemories**:对话结束时记录结构化事件 → 下次相遇时注入 prompt
+2. **Per-NPC LLM 配置**:把 thinking/max_tokens/temperature 也按 personality 映射(Alice 配 reasoning_effort=max,Bob 配 thinking:disabled)
+3. **Action 代价**:走路 -energy,聊天 -social bandwidth,真实约束推动选择
+4. **真实事件**:世界 tick 生成 events,VISION_DISTANCE 内 NPC 见证并写入 npcMemories
+5. **Goals 字段**:每个 NPC 2-3 条长期目标,推到 prompt
+6. **Anti-fabrication**:增加 `is_uncertain` / `mentions_unknown_past` 工具字段,让 LLM 有"我不知道"的出口
+7. **复制/变异/淘汰**:谣言传播 / 经历改性格 / NPC 退出场。**会重新打开 anti-fabrication 这个口子**,谨慎做
+
+---
+
+## 跑起来
+
+```bash
+git clone -b df-style-kernel git@github.com:TT1nKer/ai-town.git
+cd ai-town
+npm install
+npx convex env set LLM_API_URL  'https://api.deepseek.com'
+npx convex env set LLM_API_KEY  'sk-...你的 DeepSeek key'
+npx convex env set LLM_MODEL    'deepseek-v4-flash'
+npx convex env set LLM_EMBEDDING_MODEL 'unused-placeholder'  # F 配方不调 embedding
+npm run dev
+# 浏览器开 http://localhost:5173/ai-town,点 Interact 加入世界
+```
+
+需要 DeepSeek API key(账户余额非零才会暴露 v4 模型)。每次对话约 ¥0.0005,5 个 NPC 跑 1 小时大约 ¥0.5。
+
+---
+
+## Acknowledgments
+
+- **a16z-infra/ai-town**:引擎(`convex/engine`)、UI、Convex 集成、地图、原始 NPC 设定。这个 fork 只动了 agent 和对话生成两层
+- **Stanford "Generative Agents" 论文**:启发整个项目的范式
+- **Tarn & Zach Adams (Dwarf Fortress)**:utility-based action selection 和"breadth of shallow systems → depth"的设计哲学
+- **Doomsday/AICharacter**:作者本人前两个 agent 模拟项目,L1 状态层的 memory/contact 模型直接移植
+
+---
+
 下面是原版 README,**未做修改**。
 
 ---
