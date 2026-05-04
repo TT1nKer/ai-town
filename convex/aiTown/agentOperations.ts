@@ -69,7 +69,7 @@ export const agentGenerateMessage = internalAction({
       default:
         assertNever(args.type);
     }
-    const text = await completionFn(
+    const result = await completionFn(
       ctx,
       args.worldId,
       args.conversationId as GameId<'conversations'>,
@@ -77,14 +77,21 @@ export const agentGenerateMessage = internalAction({
       args.otherPlayerId as GameId<'players'>,
     );
 
+    // Day 5++ leave-on-shouldLeave: if LLM judged this is a natural close
+    // (topic spent, awkward lull, party dismissive), end the conversation
+    // right here. 'leave' type always exits; 'continue' exits if LLM says so;
+    // 'start' never exits (would be bizarre at hello).
+    const llmWantsToLeave = result.shouldLeave === true && args.type !== 'start';
+    const leaveConversation = args.type === 'leave' || llmWantsToLeave;
+
     await ctx.runMutation(internal.aiTown.agent.agentSendMessage, {
       worldId: args.worldId,
       conversationId: args.conversationId,
       agentId: args.agentId,
       playerId: args.playerId,
-      text,
+      text: result.speech,
       messageUuid: args.messageUuid,
-      leaveConversation: args.type === 'leave',
+      leaveConversation,
       operationId: args.operationId,
     });
   },
