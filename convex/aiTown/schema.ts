@@ -8,6 +8,7 @@ import { serializedWorld } from './world';
 import { serializedWorldMap } from './worldMap';
 import { serializedConversation } from './conversation';
 import { conversationId, playerId } from './ids';
+import { npcMemoryFields } from './npcKernel';
 
 export const aiTownTables = {
   // This table has a single document that stores all players, conversations, and agents. This
@@ -63,6 +64,15 @@ export const aiTownTables = {
     'worldId',
     'id',
   ]),
+
+  // DF-style structured memory log — one row per memory entry per agent.
+  // Append-mostly; lives outside engine state so per-step diffs stay small.
+  npcMemories: defineTable({
+    worldId: v.id('worlds'),
+    ...npcMemoryFields,
+  })
+    .index('agentId', ['worldId', 'agentId'])
+    .index('subject', ['worldId', 'agentId', 'subject']),
 
   // The agent layer wants to know what the last (completed) conversation was between two players,
   // so this table represents a labelled graph indicating which players have talked to each other.
